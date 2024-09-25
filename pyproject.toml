@@ -60,7 +60,7 @@ maintainers = [
 name = "litestar"
 readme = "README.md"
 requires-python = ">=3.8,<4.0"
-version = "2.11.0"
+version = "2.12.1"
 
 [project.urls]
 Blog = "https://blog.litestar.dev"
@@ -201,7 +201,7 @@ skip = 'pdm.lock,docs/examples/contrib/sqlalchemy/us_state_lookup.json'
 
 [tool.coverage.run]
 concurrency = ["multiprocessing", "thread"]
-omit = ["*/tests/*", "*/litestar/plugins/sqlalchemy.py"]
+omit = ["*/tests/*", "*/litestar/plugins/sqlalchemy.py", "*/litestar/_kwargs/types.py"]
 parallel = true
 plugins = ["covdefaults"]
 source = ["litestar"]
@@ -270,6 +270,10 @@ module = ["tests.unit.test_contrib.test_repository"]
 strict_equality = false
 
 [[tool.mypy.overrides]]
+module = ["tests.unit.test_contrib.test_pydantic.test_openapi"]
+disable_error_code = "index, union-attr"
+
+[[tool.mypy.overrides]]
 ignore_missing_imports = true
 module = [
   "brotli.*",
@@ -278,6 +282,13 @@ module = [
   "pytimeparse.*",
   "importlib_resources",
   "exceptiongroup",
+]
+
+[[tool.mypy.overrides]]
+warn_unused_ignores = false
+module = [
+  "litestar.contrib.sqlalchemy.*",
+  "tests.unit.test_contrib.test_sqlalchemy",
 ]
 
 [tool.pydantic-mypy]
@@ -373,6 +384,7 @@ lint.ignore = [
   "PLW2901", # pylint - for loop variable overwritten by assignment target
   "RUF012", # Ruff-specific rule - annotated with classvar
   "ISC001", # Ruff formatter incompatible
+  "CPY001", # ruff - copyright notice at the top of the file
 ]
 src = ["litestar", "tests", "docs/examples"]
 target-version = "py38"

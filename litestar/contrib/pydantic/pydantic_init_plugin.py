@@ -9,10 +9,9 @@ from msgspec import ValidationError
 from typing_extensions import Buffer, TypeGuard
 
 from litestar._signature.types import ExtendedMsgSpecValidationError
-from litestar.contrib.pydantic.utils import is_pydantic_constrained_field, is_pydantic_v2
+from litestar.contrib.pydantic.utils import is_pydantic_v2
 from litestar.exceptions import MissingDependencyException
 from litestar.plugins import InitPluginProtocol
-from litestar.typing import _KWARG_META_EXTRACTORS
 from litestar.utils import is_class_and_subclass
 
 try:
@@ -48,7 +47,7 @@ def _dec_pydantic_v1(model_type: type[pydantic_v1.BaseModel], value: Any) -> pyd
         raise ExtendedMsgSpecValidationError(errors=cast("list[dict[str, Any]]", e.errors())) from e
 
 
-def _dec_pydantic_v2(model_type: type[pydantic_v2.BaseModel], value: Any, strict: bool) -> pydantic_v2.BaseModel:
+def _dec_pydantic_v2(model_type: type[pydantic_v2.BaseModel], value: Any, strict: bool) -> pydantic_v2.BaseModel:  # pyright: ignore[reportInvalidTypeForm]
     try:
         return model_type.model_validate(value, strict=strict)
     except pydantic_v2.ValidationError as e:
@@ -112,16 +111,6 @@ def is_pydantic_v1_model_class(annotation: Any) -> TypeGuard[type[pydantic_v1.Ba
 
 def is_pydantic_v2_model_class(annotation: Any) -> TypeGuard[type[pydantic_v2.BaseModel]]:
     return is_class_and_subclass(annotation, pydantic_v2.BaseModel)
-
-
-class ConstrainedFieldMetaExtractor:
-    @staticmethod
-    def matches(annotation: Any, name: str | None, default: Any) -> bool:
-        return is_pydantic_constrained_field(annotation)
-
-    @staticmethod
-    def extract(annotation: Any, default: Any) -> Any:
-        return [annotation]
 
 
 class PydanticInitPlugin(InitPluginProtocol):
@@ -292,5 +281,4 @@ class PydanticInitPlugin(InitPluginProtocol):
             *(app_config.type_decoders or []),
         ]
 
-        _KWARG_META_EXTRACTORS.add(ConstrainedFieldMetaExtractor)
         return app_config
