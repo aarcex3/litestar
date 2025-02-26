@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import pdb  # noqa: T100
 import warnings
 from contextlib import (
     AbstractAsyncContextManager,
@@ -15,6 +16,7 @@ from functools import partial
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Iterable, Mapping, Sequence, TypedDict, cast
+from uuid import UUID
 
 from litestar._asgi import ASGIRouter
 from litestar._asgi.utils import get_route_handlers, wrap_in_exception_handler
@@ -79,6 +81,7 @@ if TYPE_CHECKING:
         BeforeMessageSendHookHandler,
         BeforeRequestHookHandler,
         ControllerRouterHandler,
+        Debugger,
         Dependencies,
         EmptyType,
         ExceptionHandlersMap,
@@ -103,7 +106,7 @@ if TYPE_CHECKING:
     from litestar.types.callable_types import LifespanHook
 
 
-__all__ = ("HandlerIndex", "Litestar", "DEFAULT_OPENAPI_CONFIG")
+__all__ = ("DEFAULT_OPENAPI_CONFIG", "HandlerIndex", "Litestar")
 
 DEFAULT_OPENAPI_CONFIG = OpenAPIConfig(title="Litestar API", version="1.0.0")
 """The default OpenAPI config used if not configuration is explicitly passed to the
@@ -136,12 +139,11 @@ class Litestar(Router):
     """
 
     __slots__ = (
-        "_lifespan_managers",
-        "_server_lifespan_managers",
         "_debug",
+        "_lifespan_managers",
         "_openapi_schema",
+        "_server_lifespan_managers",
         "_static_files_config",
-        "plugins",
         "after_exception",
         "allowed_hosts",
         "asgi_handler",
@@ -150,7 +152,9 @@ class Litestar(Router):
         "compression_config",
         "cors_config",
         "csrf_config",
+        "debugger_module",
         "event_emitter",
+        "experimental_features",
         "get_logger",
         "logger",
         "logging_config",
@@ -158,13 +162,13 @@ class Litestar(Router):
         "on_shutdown",
         "on_startup",
         "openapi_config",
+        "pdb_on_exception",
+        "plugins",
         "response_cache_config",
         "route_map",
         "state",
         "stores",
         "template_engine",
-        "pdb_on_exception",
-        "experimental_features",
     )
 
     def __init__(
@@ -202,6 +206,7 @@ class Litestar(Router):
         path: str | None = None,
         plugins: Sequence[PluginProtocol] | None = None,
         request_class: type[Request] | None = None,
+        request_max_body_size: int | None = 10_000_000,
         response_cache_config: ResponseCacheConfig | None = None,
         response_class: type[Response] | None = None,
         response_cookies: ResponseCookies | None = None,
@@ -221,6 +226,7 @@ class Litestar(Router):
         lifespan: Sequence[Callable[[Litestar], AbstractAsyncContextManager] | AbstractAsyncContextManager]
         | None = None,
         pdb_on_exception: bool | None = None,
+        debugger_module: Debugger = pdb,
         experimental_features: Iterable[ExperimentalFeatures] | None = None,
     ) -> None:
         """Initialize a ``Litestar`` application.
@@ -284,8 +290,12 @@ class Litestar(Router):
 
                 .. versionadded:: 2.8.0
             pdb_on_exception: Drop into the PDB when an exception occurs.
+            debugger_module: A `pdb`-like debugger module that supports the `post_mortem()` protocol.
+                This module will be used when `pdb_on_exception` is set to True.
             plugins: Sequence of plugins.
             request_class: An optional subclass of :class:`Request <.connection.Request>` to use for http connections.
+            request_max_body_size: Maximum allowed size of the request body in bytes. If this size is exceeded, a
+                '413 - Request Entity Too Large' error response is returned.
             response_class: A custom subclass of :class:`Response <.response.Response>` to be used as the app's default
                 response.
             response_cookies: A sequence of :class:`Cookie <.datastructures.Cookie>`.
@@ -359,8 +369,10 @@ class Litestar(Router):
             path=path or "",
             parameters=parameters or {},
             pdb_on_exception=pdb_on_exception,
+            debugger_module=debugger_module,
             plugins=self._get_default_plugins(list(plugins or [])),
             request_class=request_class,
+            request_max_body_size=request_max_body_size,
             response_cache_config=response_cache_config or ResponseCacheConfig(),
             response_class=response_class,
             response_cookies=response_cookies or [],
@@ -436,6 +448,7 @@ class Litestar(Router):
         self.websocket_class: type[WebSocket] = config.websocket_class or WebSocket
         self.debug = config.debug
         self.pdb_on_exception: bool = config.pdb_on_exception
+        self.debugger_module: Debugger = config.debugger_module
         self.include_in_schema = include_in_schema
 
         if self.pdb_on_exception:
@@ -464,6 +477,7 @@ class Litestar(Router):
             parameters=config.parameters,
             path=config.path,
             request_class=self.request_class,
+            request_max_body_size=request_max_body_size,
             response_class=config.response_class,
             response_cookies=config.response_cookies,
             response_headers=config.response_headers,
@@ -538,7 +552,7 @@ class Litestar(Router):
         plugins.append(MsgspecDIPlugin())
 
         with suppress(MissingDependencyException):
-            from litestar.contrib.pydantic import (
+            from litestar.plugins.pydantic import (
                 PydanticDIPlugin,
                 PydanticInitPlugin,
                 PydanticPlugin,
@@ -558,7 +572,7 @@ class Litestar(Router):
             if not pydantic_plugin_found and not pydantic_serialization_plugin_found:
                 plugins.append(PydanticDIPlugin())
         with suppress(MissingDependencyException):
-            from litestar.contrib.attrs import AttrsSchemaPlugin
+            from litestar.plugins.attrs import AttrsSchemaPlugin
 
             pre_configured = any(isinstance(plugin, AttrsSchemaPlugin) for plugin in plugins)
             if not pre_configured:
@@ -605,9 +619,14 @@ class Litestar(Router):
             await self.asgi_router.lifespan(receive=receive, send=send)  # type: ignore[arg-type]
             return
 
-        scope["app"] = self
+        scope["app"] = scope["litestar_app"] = self
         scope.setdefault("state", {})
         await self.asgi_handler(scope, receive, self._wrap_send(send=send, scope=scope))  # type: ignore[arg-type]
+
+    @classmethod
+    def from_scope(cls, scope: Scope) -> Litestar:
+        """Retrieve the Litestar application from the current ASGI scope"""
+        return scope["litestar_app"]
 
     async def _call_lifespan_hook(self, hook: LifespanHook) -> None:
         ret = hook(self) if inspect.signature(hook).parameters else hook()  # type: ignore[call-arg]
@@ -758,7 +777,9 @@ class Litestar(Router):
 
         Args:
             name: A route handler unique name.
-            **path_parameters: Actual values for path parameters in the route.
+            **path_parameters: Actual values for path parameters in the route. Parameters of type
+                `datetime`, `date`, `time`, `timedelta`, `float`, `Path`, `UUID`
+                may be passed in their string representations.
 
         Raises:
             NoRouteMatchFoundException: If route with 'name' does not exist, path parameters are missing in
@@ -771,7 +792,7 @@ class Litestar(Router):
         if handler_index is None:
             raise NoRouteMatchFoundException(f"Route {name} can not be found")
 
-        allow_str_instead = {datetime, date, time, timedelta, float, Path}
+        allow_str_instead = {datetime, date, time, timedelta, float, Path, UUID}
         routes = sorted(
             self.asgi_router.route_mapping[handler_index["identifier"]],
             key=lambda r: len(r.path_parameters),

@@ -3,6 +3,403 @@
 2.x Changelog
 =============
 
+.. changelog:: 2.15.0
+    :date: 2025-02-26
+
+    .. change:: Prevent accidental ``scope`` key overrides by mounted ASGI apps
+        :type: bugfix
+        :pr: 3945
+        :issue: 3934
+
+        When mounting ASGI apps, there's no guarantee they won't overwrite some key in
+        the ``scope`` that we rely on, e.g. ``scope["app"]``, which is what caused
+        https://github.com/litestar-org/litestar/issues/3934.
+
+        To prevent this, two thing shave been changed:
+
+        1. We do not store the Litestar instance under the generic ``app`` key anymore,
+           but the more specific ``litestar_app`` key. In addition the
+           :meth:`~litestar.app.Litestar.from_scope` method has been added, which can be
+           used to safely access the current app from the scope
+        2. A new parameter ``copy_scope`` has been added to the ASGI route handler,
+           which, when set to ``True`` will copy the scope before calling into the
+           mounted ASGI app, aiming to make things behave more as expected, by
+           giving the called app its own environment without causing any side-effects.
+           Since this change might break some things, It's been left it
+           with a default of ``None``, which does not copy the scope, but will issue a
+           warning if the mounted app modified it, enabling users to decide how to deal
+           with that situation
+
+    .. change:: Fix deprecated ``attrs`` import
+        :type: bugfix
+        :pr: 3947
+        :issue: 3946
+
+        A deprecated import of the ``attrs`` plugins caused a warning. This has been
+        fixed.
+
+
+    .. change:: JWT: Revoked token handler
+        :type: feature
+        :pr: 3960
+
+        Add a new ``revoked_token_handler`` on same level as ``retrieve_user_handler``,
+        for :class:`~litestar.security.jwt.BaseJWTAuth`.
+
+    .. change:: Allow ``route_reverse`` params of type ``uuid`` to be passed as ``str``
+        :type: feature
+        :pr: 3972
+
+        Allows params of type ``uuid`` to be passed as strings
+        (e.g. their hex representation) into :meth:`~litestar.app.Litestar.route_reverse`
+
+    .. change:: CLI: Better error message for invalid ``--app`` string
+        :type: feature
+        :pr: 3977
+        :issue: 3893
+
+        Improve the error handling when an invalid ``--app`` string is passed
+
+    .. change:: DTO: Support ``@property`` fields for msgspec and dataclass
+        :type: feature
+        :pr: 3981
+
+        Support :class:`property` fields for msgspec and dataclasses during serialization
+        and for OpenAPI schema generation.
+
+    .. change:: Add new ``ASGIMiddleware``
+        :type: feature
+        :pr: 3996
+
+        Add a new base middleware class to facilitate easier configuration and
+        middleware dispatching.
+
+        The new :class:`~litestar.middleware.ASGIMiddleware` features the same
+        functionality as :class:`~litestar.middleware.AbstractMiddleware`, but makes it
+        easier to pass configuration directly to middleware classes without a separate
+        configuration object, allowing the need to use
+        :class:`~litestar.middleware.DefineMiddleware`.
+
+        .. seealso::
+            :doc:`/usage/middleware/creating-middleware`
+
+    .. change:: Add ``SerializationPlugin`` and ``InitPlugin`` to replace their respective protocols
+        :type: feature
+        :pr: 4025
+
+        - Add :class:`~litestar.plugins.SerializationPlugin` to replace :class:`~litestar.plugins.SerializationPluginProtocol`
+        - Add :class:`~litestar.plugins.InitPlugin` to replace :class:`~litestar.plugins.InitPluginProtocol`
+
+        Following the same approach as for other plugins, they inherit their respective
+        protocol for now, to keep type / `isinstance` checks compatible.
+
+        .. important::
+            The plugin protocols will be removed in version 3.0
+
+    .. change:: Allow passing a ``debugger_module`` to the application
+        :type: feature
+        :pr: 3967
+
+        A new ``debugger_module`` parameter has been added to
+        :class:`~litestar.app.Litestar`, which can receive any debugger module that
+        implements a :func:`pdb.post_mortem` function with the same signature as the
+        stdlib. This function will be called when an exception occurs and
+        ``pdb_on_exception`` is set to ``True``\ .
+
+
+.. changelog:: 2.14.0
+    :date: 2025-02-12
+
+    .. change:: Deprecate ``litestar.contrib.prometheus`` in favour of  ``litestar.plugins.prometheus``
+        :type: feature
+        :pr: 3863
+
+        The module ``litestar.contrib.prometheus`` has been moved to
+        ``litestar.plugins.prometheus``. ``litestar.contrib.prometheus`` will be
+        deprecated in the next major version
+
+    .. change:: Deprecate ``litestar.contrib.attrs`` in favour of ``litestar.plugins.attrs``
+        :type: feature
+        :pr: 3862
+
+        The module ``litestar.contrib.attrs`` has been moved to
+        ``litestar.plugins.attrs``. ``litestar.contrib.attrs`` will be
+        deprecated in the next major version
+
+    .. change:: Add a streaming multipart parser
+        :type: feature
+        :pr: 3872
+
+        Add a streaming multipart parser via the
+        `multipart <https://github.com/defnull/multipart>`_ library
+
+        This provides
+
+        - Ability to stream large / larger-than-memory file uploads
+        - Better / more correct edge case handling
+        - Still good performance
+
+    .. change:: Add WebSocket send stream
+        :type: feature
+        :pr: 3894
+
+        Add a new :func:`~litestar.handlers.websocket_stream` route
+        handler that supports streaming data *to* a WebSocket via an async generator.
+
+        .. code-block:: python
+
+            @websocket_stream("/")
+            async def handler() -> AsyncGenerator[str, None]:
+                yield str(time.time())
+                await asyncio.sleep(.1)
+
+
+        This is roughly equivalent to (with some edge case handling omitted):
+
+        .. code-block:: python
+
+            @websocket("/")
+            async def handler(socket: WebSocket) -> None:
+              await socket.accept()
+
+              try:
+                async with anyio.task_group() as tg:
+                  # 'receive' in the background to catch client disconnects
+                  tg.start_soon(socket.receive)
+
+                  while True:
+                    socket.send_text(str(time.time()))
+                    await asyncio.sleep(.1)
+              finally:
+                await socket.close()
+
+
+        Just like the WebSocket listeners, it also supports dependency injection and
+        serialization:
+
+        .. code-block:: python
+
+            @dataclass
+            class Event:
+                time: float
+                data: str
+
+
+            async def provide_client_info(socket: WebSocket) -> str:
+                return f"{socket.client.host}:{socket.client.port}"
+
+
+            @websocket_stream("/", dependencies={"client_info": provide_client_info})
+            async def handler(client_info: str) -> AsyncGenerator[Event, None]:
+                yield Event(time=time.time(), data="hello, world!")
+                await asyncio.sleep(.1)
+
+
+        .. seealso::
+            :ref:`usage/websockets:WebSocket Streams`
+
+
+    .. change:: Add query params to ``Redirect``
+        :type: feature
+        :pr: 3901
+        :issue: 3891
+
+        Add a ``query_params`` parameter to :class:`~litestar.response.Redirect`, to
+        supply query parameters for a redirect
+
+    .. change:: Add Valkey as a native store
+        :type: feature
+        :pr: 3892
+
+        Add a new :class:`~litestar.stores.valkey.ValkeyStore`, which provides the same
+        functionality as the :class:`~litestar.stores.redis.RedisStore` but using valkey
+        instead.
+
+        The necessary dependencies can be installed with the ``litestar[valkey]`` extra,
+        which includes ``valkey`` as well as ``libvalkey`` as an optimisation layer.
+
+
+    .. change:: Correctly specify ``"path"`` as an error message source for validation errors
+        :type: feature
+        :pr: 3920
+        :issue: 3919
+
+        Use ``"path"`` as the ``"source"`` property of a validation error message if the
+        key is a path parameter.
+
+
+    .. change:: Add subprocess test client
+        :type: feature
+        :pr: 3655
+        :issue: 3654
+
+        Add new :func:`~litestar.testing.subprocess_async_client` and :func:`~litestar.testing.subprocess_sync_client`,
+        which can run an application in a new process, primarily for the purpose of
+        end-to-end testing.
+
+        The application will be run with ``uvicorn``, which has to be installed separately or via the
+        ``litestar[standard]`` group.
+
+    .. change:: Support for Python 3.13
+        :type: feature
+        :pr: 3850
+
+         Support Python 3.13
+
+        .. important::
+
+            - There are no Python 3.13 prebuilt wheels for ``psycopg[binary]``.  If you
+              rely on this for development, you'll need to have the postgres development
+              libraries installed
+            - ``picologging`` does not currently support Python 3.13
+
+    .. change:: OpenAPI: Always generate refs for enums
+        :type: bugfix
+        :pr: 3525
+        :issue: 3518
+
+        Ensure that enums always generate a schema reference instead of being inlined
+
+    .. change:: Support varying ``mtime`` semantics across different fsspec implementations
+        :type: bugfix
+        :pr: 3902
+        :issue: 3899
+
+        Change the implementation of :class:`~litestar.response.File` to be able to
+        handle most fsspec implementation's ``mtime`` equivalent.
+
+        This is necessary because fsspec implementations do not have a standardised way
+        to retrieve an ``mtime`` equivalent; Some report an ``mtime``, while some may
+        use a different key (e.g. ``Last-Modified``) and others do not report this value
+        at all.
+
+
+    .. change:: OpenAPI: Ensure query-only properties are only included in queries
+        :type: bugfix
+        :pr: 3909
+        :issue: 3908
+
+        Remove the inclusion of the query-only properties ``allowEmptyValue``
+        and ``allowReserved`` in path, cookie, header parameter and response header
+        schemas
+
+    .. change:: Channels: Use ``SQL`` function for in psycopg backend
+        :type: bugfix
+        :pr: 3916
+
+        Update the :class:`~litestar.channels.backends.psycopg.PsycoPgChannelsBackend`
+        backend to use the native psycopg ``SQL`` API
+
+
+.. changelog:: 2.13.0
+    :date: 2024-11-20
+
+    .. change:: Add ``request_max_body_size`` layered parameter
+        :type: feature
+
+        Add a new ``request_max_body_size`` layered parameter, which limits the
+        maximum size of a request body before returning a ``413 - Request Entity Too Large``.
+
+        .. seealso::
+            :ref:`usage/requests:limits`
+
+
+    .. change:: Send CSRF request header in OpenAPI plugins
+        :type: feature
+        :pr: 3754
+
+        Supported OpenAPI UI clients will extract the CSRF cookie value and attach it to
+        the request headers if CSRF is enabled on the application.
+
+    .. change:: deprecate `litestar.contrib.sqlalchemy`
+        :type: feature
+        :pr: 3755
+
+        Deprecate the ``litestar.contrib.sqlalchemy`` module in favor of ``litestar.plugins.sqlalchemy``
+
+
+    .. change:: implement `HTMX` plugin using `litestar-htmx`
+        :type: feature
+        :pr: 3837
+
+        This plugin migrates the HTMX integration to ``litestar.plugins.htmx``.
+
+        This logic has been moved to it's own repository named ``litestar-htmx``
+
+    .. change:: Pydantic: honor ``hide_input_in_errors`` in throwing validation exceptions
+        :type: feature
+        :pr: 3843
+
+        Pydantic's ``BaseModel`` supports configuration to hide data values when
+        throwing exceptions, via setting ``hide_input_in_errors`` -- see
+        https://docs.pydantic.dev/2.0/api/config/#pydantic.config.ConfigDict.hide_input_in_errors
+        and https://docs.pydantic.dev/latest/usage/model_config/#hide-input-in-errors
+
+        Litestar will now honour this setting
+
+    .. change:: deprecate``litestar.contrib.pydantic``
+        :type: feature
+        :pr: 3852
+        :issue: 3787
+
+        ## Description
+
+        Deprecate ``litestar.contrib.pydantic`` in favor of ``litestar.plugins.pydantic``
+
+
+    .. change:: Fix sign bug in rate limit middelware
+        :type: bugfix
+        :pr: 3776
+
+        Fix a bug in the rate limit middleware, that would cause the response header
+        fields ``RateLimit-Remaining`` and ``RateLimit-Reset`` to have negative values.
+
+
+    .. change:: OpenAPI: map JSONSchema spec naming convention to snake_case when names from ``schema_extra`` are not found
+        :type: bugfix
+        :pr: 3767
+        :issue: 3766
+
+        Address rejection of ``schema_extra`` values using JSONSchema spec-compliant
+        key names by mapping between the relevant naming conventions.
+
+    .. change:: Use correct path template for routes without path parameters
+        :type: bugfix
+        :pr: 3784
+
+        Fix a but where, when using ``PrometheusConfig.group_path=True``, the metrics
+        exporter response content would ignore all paths with no path parameters.
+
+    .. change:: Fix a dangling anyio stream in ``TestClient``
+        :type: bugfix
+        :pr: 3836
+        :issue: 3834
+
+        Fix a dangling anyio stream in ``TestClient`` that would cause a resource warning
+
+        Closes #3834.
+
+    .. change:: Fix bug in handling of missing ``more_body`` key in ASGI response
+        :type: bugfix
+        :pr: 3845
+
+        Some frameworks do not include the ``more_body`` key in the "http.response.body" ASGI event.
+        According to the ASGI specification, this key should be set to ``False`` when
+        there is no additional body content. Litestar expects ``more_body`` to be
+        explicitly defined, but others might not.
+
+        This leads to failures when an ASGI framework mounted on Litestar throws error
+        if this key is missing.
+
+
+    .. change:: Fix duplicate ``RateLimit-*`` headers with caching
+        :type: bugfix
+        :pr: 3855
+        :issue: 3625
+
+        Fix a bug where ``RateLimitMiddleware`` duplicate all ``RateLimit-*`` headers
+        when handler cache is enabled.
+
 
 .. changelog:: 2.12.1
     :date: 2024-09-21

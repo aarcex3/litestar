@@ -54,6 +54,7 @@ def fake_asgi_connection(app: ASGIApp, cookies: dict[str, str]) -> ASGIConnectio
         "http_version": "1.1",
         "extensions": {"http.response.template": {}},
         "app": app,  # type: ignore[typeddict-item]
+        "litestar_app": app,
         "state": {},
         "path_params": {},
         "route_handler": None,
@@ -97,13 +98,13 @@ class BaseTestClient(Generic[T]):
     blocking_portal: BlockingPortal
 
     __slots__ = (
+        "_session_backend",
         "app",
-        "base_url",
         "backend",
         "backend_options",
-        "session_config",
-        "_session_backend",
+        "base_url",
         "cookies",
+        "session_config",
     )
 
     def __init__(

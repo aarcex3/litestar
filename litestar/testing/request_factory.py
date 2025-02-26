@@ -55,12 +55,12 @@ class RequestFactory:
 
     __slots__ = (
         "app",
-        "server",
+        "handler_kwargs",
         "port",
         "root_path",
         "scheme",
-        "handler_kwargs",
         "serializer",
+        "server",
     )
 
     def __init__(
@@ -75,7 +75,7 @@ class RequestFactory:
         """Initialize ``RequestFactory``
 
         Args:
-             app: An instance of :class:`Litestar <litestar.app.Litestar>` to set as ``request.scope["app"]``.
+             app: An instance of :class:`Litestar <litestar.app.Litestar>` to set as ``request.scope["litestar_app"]``.
              server: The server's domain.
              port: The server's port.
              root_path: Root path for the server.
@@ -175,6 +175,7 @@ class RequestFactory:
             path=path,
             headers=[],
             app=self.app,
+            litestar_app=self.app,
             session=session,
             user=user,
             auth=auth,
